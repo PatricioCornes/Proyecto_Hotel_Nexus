@@ -1,0 +1,8 @@
+com\nexus\hospitality_reservation\service\ReservacionService.class
+com\nexus\hospitality_reservation\controller\ReservaController.class
+com\nexus\hospitality_reservation\dto\HabitacionDTO.class
+com\nexus\hospitality_reservation\model\Reservacion.class
+com\nexus\hospitality_reservation\repository\ReservacionRepository.class
+com\nexus\hospitality_reservation\NexusHospitalityReservationApplication.class
+com\nexus\hospitality_reservation\client\HabitacionClient.class
+com\nexus\hospitality_reservation\dto\ReservacionDTO.class
