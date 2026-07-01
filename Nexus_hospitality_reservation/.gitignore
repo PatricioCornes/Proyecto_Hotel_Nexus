@@ -1,0 +1,43 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Archivos del Sistema (Opcional pero recomendado) ###
+Thumbs.db
+.DS_Store
+*.log
+
+### Base de datos y Credenciales locales (Opcional) ###
+# Descomenta las siguientes líneas si usas perfiles locales para no subir tus contraseñas a Git
+# application-local.properties
+# application-local.yml
