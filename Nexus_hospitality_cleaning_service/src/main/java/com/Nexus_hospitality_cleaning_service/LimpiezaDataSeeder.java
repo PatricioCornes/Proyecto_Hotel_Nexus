@@ -33,11 +33,6 @@ public class LimpiezaDataSeeder implements CommandLineRunner {
         );
     }
 
-    /**
-     * Como los microservicios no comparten DB/relaciones, guardamos un id de habitacion.
-     * Si la habitacion 101 existe, su id real puede no ser 101.
-     * Para mantenerlo simple, usamos 1:1 con 101L.
-     */
     private Long obtenerHabitacionIdSiExiste(Long habitacionNumero) {
         return habitacionNumero;
     }

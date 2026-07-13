@@ -22,11 +22,9 @@ public class Limpieza {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // Clave natural (para seguir el mismo patrón que Habitacion/Pago)
     @Column(nullable = false, unique = true)
     private String referencia;
 
-    // Referencia a la habitación por contrato (solo id/código)
     @Column(name = "habitacion_id", nullable = false)
     private Long habitacionId;
 
@@ -38,5 +36,11 @@ public class Limpieza {
 
     @Column(nullable = false)
     private String estado;
+
+    @Column(name = "reserva_codigo")
+    private String reservaCodigo;
+
+    @Column(name = "empleado_id")
+    private Long empleadoId;
 }
 

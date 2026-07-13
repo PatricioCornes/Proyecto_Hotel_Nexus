@@ -6,6 +6,7 @@ import java.time.LocalDateTime;
 import jakarta.validation.constraints.FutureOrPresent;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 
 @Data
@@ -17,15 +18,15 @@ public class EstacionamientoDTO {
     private String codigoPlaza;
 
     @NotBlank(message = "El estado inicial de la plaza es obligatorio")
+    @Pattern(regexp = "DISPONIBLE|OCUPADO|RESERVADO|EN_MANTENIMIENTO", message = "Estado de estacionamiento no valido")
     private String estado;
 
-    // No es obligatorio (@NotBlank) al guardar, ya que la plaza puede crearse vacía
     @Size(max = 15, message = "La patente no puede superar los 15 caracteres")
+    @Pattern(regexp = "[A-Za-z0-9-]*", message = "Formato de patente invalido")
     private String patenteVehiculo;
 
     private String tipoVehiculo;
 
-    // Cambiado a LocalDateTime y validado para que sea la fecha actual o futura al registrar el ingreso
     @FutureOrPresent(message = "La fecha de ingreso no puede ser una fecha pasada")
     private LocalDateTime fechaIngreso;
 

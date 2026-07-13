@@ -24,7 +24,7 @@ public class EstacionamientoService {
 
     public Estacionamiento findById(Long id) {
         return estacionamientoRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Estacionamiento no encontrada")); 
+                .orElseThrow(() -> new IllegalArgumentException("Estacionamiento no encontrado"));
     }
 
     public Estacionamiento save(EstacionamientoDTO dto) {
@@ -57,6 +57,7 @@ public class EstacionamientoService {
     }
 
     public void delete(Long id) {
+        findById(id);
         estacionamientoRepository.deleteById(id);
     }
 

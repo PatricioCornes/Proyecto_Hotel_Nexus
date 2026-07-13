@@ -19,7 +19,6 @@ public class RestaurantDataSeeder implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        // Inserta un menu simple solo si no existe todavía
         restaurantRepositorio.findByNombre("Menu del Dia").ifPresentOrElse(
                 r -> {},
                 () -> {

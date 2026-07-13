@@ -66,11 +66,28 @@ public class HabitacionServicio {
         habitacionRepositorio.deleteById(id);
     }
 
+    @Transactional
+    public Habitacion asignarDisponible(String tipo) {
+        Habitacion habitacion = (tipo == null || tipo.isBlank()
+                ? habitacionRepositorio.findFirstByEstadoIgnoreCaseOrderByIdAsc("Disponible")
+                : habitacionRepositorio.findFirstByTipoIgnoreCaseAndEstadoIgnoreCaseOrderByIdAsc(tipo, "Disponible"))
+                .orElseThrow(() -> new IllegalStateException("No hay habitaciones disponibles"));
+        habitacion.setEstado("Reservada");
+        return habitacionRepositorio.save(habitacion);
+    }
+
+    @Transactional
+    public void cambiarEstado(Long id, String estado) {
+        Habitacion habitacion = obtenerPorId(id);
+        habitacion.setEstado(estado);
+        habitacionRepositorio.save(habitacion);
+    }
+
     private void validarNumero(String numero, Long idActual) {
         Optional<Habitacion> posible = habitacionRepositorio.findByNumero(numero);
         if (posible.isPresent()) {
             if (idActual == null || !posible.get().getId().equals(idActual)) {
-                throw new IllegalArgumentException("Ya existe una habitación con número=" + numero);
+                throw new IllegalStateException("Ya existe una habitación con número=" + numero);
             }
         }
     }

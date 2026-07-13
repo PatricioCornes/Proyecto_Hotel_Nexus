@@ -8,5 +8,6 @@ import java.util.Optional;
 public interface LimpiezaRepositorio extends JpaRepository<Limpieza, Long> {
     Optional<Limpieza> findByReferencia(String referencia);
     boolean existsByReferencia(String referencia);
+    Optional<Limpieza> findByReservaCodigo(String reservaCodigo);
 }
 

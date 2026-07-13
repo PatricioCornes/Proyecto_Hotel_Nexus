@@ -38,12 +38,7 @@ public class PersonalController {
 
     @GetMapping("/{id}")
     public ResponseEntity<Personal> buscar(@PathVariable Long id) {
-        try {
-            Personal personal = personalService.findById(id);
-            return ResponseEntity.ok(personal);
-        } catch (Exception c) {
-            return ResponseEntity.notFound().build();
-        }
+        return ResponseEntity.ok(personalService.findById(id));
     }
 
     @PostMapping
@@ -54,22 +49,24 @@ public class PersonalController {
 
     @PutMapping("/{id}")
     public ResponseEntity<Personal> actualizar(@PathVariable Long id, @Valid @RequestBody PersonalDTO dto) {
-        try {
-            Personal personalActualizado = personalService.update(id, dto);
-            return ResponseEntity.ok(personalActualizado);
-        } catch (Exception e) {
-            return ResponseEntity.notFound().build();
-        }
+        return ResponseEntity.ok(personalService.update(id, dto));
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> eliminar(@PathVariable Long id) {
-        try {
-            personalService.delete(id);
-            return ResponseEntity.noContent().build();
-        } catch (Exception e) {
-            return ResponseEntity.notFound().build();
-        }
+        personalService.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/interno/asignar/{cargo}")
+    public ResponseEntity<Personal> asignar(@PathVariable String cargo) {
+        return ResponseEntity.ok(personalService.asignarDisponible(cargo));
+    }
+
+    @PostMapping("/interno/{id}/liberar")
+    public ResponseEntity<Void> liberar(@PathVariable Long id) {
+        personalService.liberar(id);
+        return ResponseEntity.noContent().build();
     }
 
 }

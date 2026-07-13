@@ -38,12 +38,7 @@ public class EstacionamientoController {
 
     @GetMapping("/{id}")
     public ResponseEntity<Estacionamiento> buscar(@PathVariable Long id) {
-        try {
-            Estacionamiento estacionamiento = estacionamientoService.findById(id);
-            return ResponseEntity.ok(estacionamiento);
-        } catch (Exception e) {
-            return ResponseEntity.notFound().build(); // Captura si el Service lanza RuntimeException
-        }
+        return ResponseEntity.ok(estacionamientoService.findById(id));
     }
 
     @PostMapping
@@ -54,22 +49,13 @@ public class EstacionamientoController {
 
     @PutMapping("/{id}")
     public ResponseEntity<Estacionamiento> actualizar(@PathVariable Long id, @Valid @RequestBody EstacionamientoDTO dto) {
-        try {
-            Estacionamiento estacionamientoActualizado = estacionamientoService.update(id, dto);
-            return ResponseEntity.ok(estacionamientoActualizado);
-        } catch (Exception e) {
-            return ResponseEntity.notFound().build();
-        }
+        return ResponseEntity.ok(estacionamientoService.update(id, dto));
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> eliminar(@PathVariable Long id) {
-        try {
-            estacionamientoService.delete(id);
-            return ResponseEntity.noContent().build();
-        } catch (Exception e) {
-            return ResponseEntity.notFound().build();
-        }
+        estacionamientoService.delete(id);
+        return ResponseEntity.noContent().build();
     }
 
 }

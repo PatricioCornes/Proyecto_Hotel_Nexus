@@ -1,0 +1,12 @@
+src
+.mvn
+.git
+.idea
+.vscode
+mvnw
+mvnw.cmd
+*.iml
+target/classes
+target/test-classes
+target/maven-*
+target/surefire-reports

@@ -71,7 +71,7 @@ public class RestaurantServicio {
         Optional<Restaurant> posible = restaurantRepositorio.findByNombre(nombre);
         if (posible.isPresent()) {
             if (idActual == null || !posible.get().getId().equals(idActual)) {
-                throw new IllegalArgumentException("Ya existe un restaurant con nombre=" + nombre);
+                throw new IllegalStateException("Ya existe un restaurant con nombre=" + nombre);
             }
         }
     }

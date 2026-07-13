@@ -35,9 +35,5 @@ public class Habitacion {
     @Column(nullable = false)
     private String estado;
 
-    public void setNumero(String numero2) {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'setNumero'");
-    }
 }
 

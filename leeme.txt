@@ -1,0 +1,1427 @@
+este proyecto es para una evaluacion 
+transversal en duoc uc,
+me pidieron hacer funcionar la comunicacion
+de estos microservicios conectados a la base de datos 
+(ya estan)
+anterior mente solo se conectaban reservations con payments 
+pero los demas carecian de comunicacion alguna
+
+
+
+
+
+logica de negocio:
+
+Gestión de Reservas y Pagos
+Una reserva se confirma automáticamente cuando el pago es aprobado.
+Las cancelaciones pueden generar reembolsos según la anticipación.
+Administración de Habitaciones
+Asignación automática de habitaciones disponibles a las reservas confirmadas.
+Control de estados: Disponible, Reservada, Ocupada, Sucia y En Mantenimiento.
+Servicio de Limpieza
+Al realizar el check-out, la habitación pasa a estado "Sucia".
+Se genera una tarea de limpieza y se asigna automáticamente a un empleado disponible.
+Tras finalizar la limpieza, la habitación vuelve a estar disponible.
+Restaurante
+Los consumos del restaurante pueden cargarse directamente a la habitación del huésped.
+Se incluyen en la factura final.
+Estacionamiento (Garage)
+Registro de uso de estacionamiento durante la estadía.
+Cálculo automático del costo y agregado a la cuenta final.
+Personal (Staff)
+Gestión de empleados y asignación automática de tareas de limpieza o mantenimiento.
+Facturación Final
+Al hacer check-out se consolidan todos los cargos:
+Habitación
+Restaurante
+Estacionamiento
+Servicios adicionales
+Eventos entre Microservicios
+Uso de eventos como:
+ReservationCreated
+PaymentCompleted
+CheckInCompleted
+CheckOutCompleted
+CleaningRequested
+CleaningFinished
+
+# BITÁCORA TÉCNICA - HOTEL NEXUS
+
+Fecha de inicio de la integración: 13-07-2026
+Contexto: Evaluación transversal DUOC UC
+
+======================================================================
+1. OBJETIVO
+======================================================================
+
+Integrar los siete microservicios del proyecto Hotel Nexus para que el
+proceso hotelero completo funcione de manera coordinada:
+
+- Reservas y pagos.
+- Asignación y estados de habitaciones.
+- Check-in y check-out.
+- Limpieza y asignación de personal.
+- Consumos de restaurante.
+- Uso y cobro de estacionamiento.
+- Facturación final consolidada.
+
+La solución usa dos formas de comunicación:
+
+1) RabbitMQ para eventos de negocio que pueden tener varios consumidores.
+2) REST para comandos o consultas que necesitan una respuesta inmediata.
+
+Esta combinación evita convertir todo el sistema en una cadena de llamadas
+síncronas y mantiene explícitos los contratos entre servicios.
+
+======================================================================
+2. ESTADO BASE ENCONTRADO ANTES DE LOS CAMBIOS
+======================================================================
+
+El repositorio contenía siete aplicaciones Spring Boot 4.0.6 / Java 21,
+cada una con su propio pom.xml, puerto y conexión JPA/MySQL:
+
+- Staff:        puerto 8080, base db_nexus_staff.
+- Rooms:        puerto 8081, base db_hotel_nexus.
+- Restaurant:   puerto 8082, base restaurant.
+- Reservation:  puerto 8083, base db_nexus_reservation.
+- Payments:     puerto 8084, base payments.
+- Garage:       puerto 8085, base db_nexus_garage.
+- Cleaning:     puerto 8086, base cleaning.
+
+Todos tenían una estructura CRUD básica de controlador, servicio,
+repositorio y entidad. No existían API Gateway, broker de eventos,
+orquestación general, factura consolidada ni contratos compartidos.
+
+En el código inspeccionado, la única comunicación remota explícita era un
+cliente Feign desde Reservation hacia Rooms. Payments todavía era un CRUD
+aislado, por lo que una aprobación no confirmaba realmente una reserva.
+
+Problemas relevantes del estado inicial:
+
+- Reservation confundía el número visible de habitación (por ejemplo 101)
+  con el ID interno de la tabla y exigía IDs entre 100 y 200.
+- Rooms tenía un setNumero manual que siempre lanzaba
+  UnsupportedOperationException al actualizar.
+- Una reserva comprobaba disponibilidad antes del pago, pero no existía una
+  asignación atómica al confirmarla.
+- No existían eventos entre procesos.
+- Cleaning guardaba un habitacionId, pero no consultaba Rooms ni Staff.
+- Restaurant no tenía consumos asociados a una estadía.
+- Garage administraba plazas, pero no modelaba un uso facturable.
+- Staff no tenía estado de disponibilidad.
+- Payments no relacionaba pagos con reservas ni consolidaba cargos.
+- Los tests existentes sólo eran contextLoads y requerían infraestructura.
+- Los scripts mvnw.cmd fallaban en PowerShell cuando ~/.m2 no era un enlace.
+- Sólo Reservation y Staff tenían Dockerfile; no existía compose general.
+
+======================================================================
+3. ARQUITECTURA IMPLEMENTADA
+======================================================================
+
+                         RabbitMQ: nexus.events
+                                   |
+        +--------------------------+---------------------------+
+        |                          |                           |
+    Reservation                 Cleaning                   Payments
+        |                          |                           |
+        +--> Rooms (asignar)       +--> Staff (asignar)        +--> Reservation (cargo)
+        +--> Payments (reembolso)  +--> Staff (liberar)        +--> Restaurant (total)
+                                                               +--> Garage (total)
+
+Regla utilizada:
+
+- Evento RabbitMQ: informa un hecho ya confirmado y puede despertar a más
+  de un servicio.
+- REST interno: ejecuta una operación que necesita respuesta inmediata,
+  como reservar una habitación o asignar un empleado concreto.
+
+Los eventos se publican después del commit de la transacción local. De esta
+forma, otro microservicio no recibe un hecho cuya escritura todavía podría
+revertirse.
+
+Exchange RabbitMQ: nexus.events (topic, durable)
+
+Eventos implementados:
+
+- ReservationCreated
+  Routing key: reservation.created
+  Productor: Reservation.
+  Se emite después de crear una reserva PENDIENTE_PAGO.
+
+- PaymentCompleted
+  Routing key: payment.completed
+  Productor: Payments.
+  Consumidor: Reservation.
+  Si aprobado=true, Reservation asigna una habitación y se confirma.
+
+- CheckInCompleted
+  Routing key: stay.checkin.completed
+  Productor: Reservation.
+  Consumidor: Rooms.
+  Rooms cambia la habitación desde Reservada a Ocupada.
+
+- CheckOutCompleted
+  Routing key: stay.checkout.completed
+  Productor: Reservation.
+  Consumidores: Rooms, Cleaning y Payments (cada uno tiene su propia cola).
+  Rooms marca Sucia, Cleaning crea/asigna tarea y Payments genera factura.
+
+- CleaningRequested
+  Routing key: cleaning.requested
+  Productor: Cleaning.
+  Registra que la tarea fue creada y ya tiene empleado asignado.
+
+- CleaningFinished
+  Routing key: cleaning.finished
+  Productor: Cleaning.
+  Consumidor: Rooms.
+  Rooms vuelve a dejar la habitación Disponible.
+
+Colas durables creadas:
+
+- reservations.payment-events
+- rooms.stay-events
+- rooms.cleaning-events
+- cleaning.checkout-events
+- payments.checkout-events
+
+======================================================================
+4. REGLAS DE NEGOCIO IMPLEMENTADAS
+======================================================================
+
+4.1 Reserva, pago y asignación
+
+- Una reserva nueva queda PENDIENTE_PAGO y todavía no posee habitación.
+- Payments recibe una aprobación relacionada con codigoReserva.
+- Payments guarda el pago APROBADO y emite PaymentCompleted.
+- Reservation consume el evento de forma idempotente.
+- Rooms selecciona con bloqueo pesimista la primera habitación Disponible
+  del tipo solicitado. Así se evita asignar la misma habitación a dos pagos
+  procesados simultáneamente.
+- La tarifa por noche se copia a la reserva al confirmar. Esto conserva el
+  precio histórico aunque luego cambie el precio de Rooms.
+- Estados de reserva usados: PENDIENTE_PAGO, CONFIRMADA, OCUPADA,
+  FINALIZADA y CANCELADA.
+
+4.2 Cancelaciones y reembolsos
+
+- 7 días o más de anticipación: 100%.
+- Entre 2 y 6 días: 50%.
+- Menos de 2 días: 0%.
+- Reservation solicita el reembolso a Payments.
+- Si ya había habitación asignada, vuelve a Disponible.
+- Payments guarda el movimiento con tipo REEMBOLSO para mantener trazabilidad.
+
+4.3 Estados de habitación
+
+Estados controlados por el flujo:
+
+- Disponible -> Reservada: pago aprobado y asignación.
+- Reservada -> Ocupada: CheckInCompleted.
+- Ocupada -> Sucia: CheckOutCompleted.
+- Sucia -> Disponible: CleaningFinished.
+- En Mantenimiento sigue disponible como estado administrativo mediante el
+  CRUD de Rooms y no participa en asignación automática.
+
+4.4 Limpieza y personal
+
+- CheckOutCompleted genera una tarea de limpieza una sola vez por reserva.
+- Cleaning solicita a Staff un empleado disponible con cargo LIMPIEZA.
+- Staff bloquea al empleado y cambia disponible=false.
+- La tarea queda ASIGNADA con habitacionId, reservaCodigo y empleadoId.
+- Al finalizar, Staff libera al empleado y Cleaning emite CleaningFinished.
+
+4.5 Restaurante
+
+- Se agregó el concepto Consumo.
+- Cada consumo contiene reservaCodigo, descripción, monto y fecha.
+- La suma por reserva es consultada por Payments para la factura final.
+
+4.6 Garage
+
+- Se agregó UsoEstacionamiento, separado del catálogo de plazas existente.
+- Registra reservaCodigo, patente, entrada, salida y tarifa por hora.
+- Al marcar salida calcula horas hacia arriba, con mínimo de una hora.
+- Si la factura se consulta con un uso todavía abierto, calcula el costo
+  acumulado hasta ese momento.
+
+4.7 Facturación final
+
+- Payments consume CheckOutCompleted y consulta los subtotales de Reservation,
+  Restaurant y Garage.
+- También suma cargos adicionales registrados directamente en Payments.
+- Se persiste una FacturaFinal única por codigoReserva.
+- Repetir la consolidación actualiza la misma factura (operación idempotente).
+- Campos: habitación, restaurante, estacionamiento, servicios adicionales,
+  total, pagado y saldo.
+
+======================================================================
+5. ENDPOINTS PRINCIPALES AGREGADOS
+======================================================================
+
+Reservation (8083)
+
+- POST /reservaciones
+- POST /reservaciones/{id}/check-in
+- POST /reservaciones/{id}/check-out
+- POST /reservaciones/{id}/cancelar
+- GET  /reservaciones/interno/{codigo}/cargo-habitacion
+
+Payments (8084)
+
+- POST /pagos/reservas/{codigo}/aprobar
+- POST /pagos/reservas/{codigo}/reembolso
+- GET  /facturas/reserva/{codigo}
+- POST /cargos-adicionales
+- GET  /cargos-adicionales/reserva/{codigo}
+
+Rooms (8081, contrato interno)
+
+- POST /interno/habitaciones/asignar
+- PUT  /interno/habitaciones/{id}/estado
+
+Cleaning (8086)
+
+- POST /limpiezas/{id}/finalizar
+
+Staff (8080, contratos internos)
+
+- POST /empleados/interno/asignar/{cargo}
+- POST /empleados/interno/{id}/liberar
+
+Restaurant (8082)
+
+- POST /consumos
+- GET  /consumos/reserva/{codigo}
+- GET  /consumos/reserva/{codigo}/total
+
+Garage (8085)
+
+- POST /usos-estacionamiento
+- POST /usos-estacionamiento/{id}/salida
+- GET  /usos-estacionamiento/reserva/{codigo}
+- GET  /usos-estacionamiento/reserva/{codigo}/total
+
+======================================================================
+6. ARCHIVOS Y CAMBIOS REALIZADOS
+======================================================================
+
+Cambios transversales:
+
+- Se agregó docker-compose.yml con MySQL 8.4, RabbitMQ Management y los
+  siete microservicios ejecutables como contenedores.
+- Se agregaron/normalizaron Dockerfile para los siete servicios usando JRE 25.
+- Se corrigieron los siete mvnw.cmd para funcionar en PowerShell.
+- Se parametrizaron URLs de bases y servicios mediante variables de entorno.
+- Se agregó spring-boot-starter-amqp a Rooms, Reservation, Payments y Cleaning.
+
+Rooms:
+
+- pom.xml y application.properties: RabbitMQ y configuración portable.
+- Habitacion.java: eliminado setter defectuoso.
+- HabitacionRepositorio.java: búsquedas bloqueantes por estado/tipo.
+- HabitacionServicio.java: asignación atómica y cambio de estado.
+- HabitacionInternaControlador.java: comandos internos.
+- MessagingConfig.java: exchange, colas y bindings.
+- HabitacionEventListener.java: CheckIn, CheckOut y CleaningFinished.
+
+Reservation:
+
+- pom.xml: AMQP y procesador Lombok explícito para JDK 25.
+- application.properties: URLs internas y RabbitMQ.
+- HabitacionClient.java y PagoClient.java: contratos Feign.
+- ReservacionDTO.java: tipo de habitación, respuesta detallada y validación
+  del rango de fechas; se eliminó el rango incorrecto de IDs 100..200.
+- Reservacion.java: tipo, habitacionId Long y precio histórico.
+- ReservacionRepository.java: búsqueda por código.
+- ReservacionService.java: ciclo completo, reembolso y cargo de habitación.
+- ReservaController.java: check-in, check-out, cancelar y subtotal.
+- MessagingConfig.java, ReservationEventPublisher.java y
+  PaymentCompletedListener.java: mensajería.
+
+Payments:
+
+- pom.xml y application.properties: AMQP y URLs de los proveedores de cargos.
+- Pago.java: reservaCodigo y tipo de movimiento.
+- PagoRepositorio.java y PagoServicio.java: pagos por reserva, aprobación,
+  reembolso y total pagado.
+- PagoControlador.java: aprobación y reembolso.
+- PaymentEventPublisher.java: PaymentCompleted después del commit.
+- FacturaFinal.java, FacturaFinalRepositorio.java, FacturacionServicio.java y
+  FacturacionControlador.java: consolidación y persistencia.
+- CheckOutCompletedListener.java y MessagingConfig.java: factura automática.
+- CargoAdicional.java, repositorio y controlador: servicios adicionales.
+- PagoDataSeeder.java: movimiento inicial tipificado como COBRO.
+
+Cleaning:
+
+- pom.xml y application.properties: AMQP, DB portable y URL de Staff.
+- Limpieza.java: reservaCodigo y empleadoId.
+- LimpiezaRepositorio.java: idempotencia por reserva.
+- LimpiezaServicio.java: creación automática, asignación y finalización.
+- LimpiezaControlador.java: endpoint finalizar.
+- MessagingConfig.java, CheckOutCompletedListener.java y
+  CleaningEventPublisher.java: eventos de limpieza.
+
+Staff:
+
+- Personal.java: campo disponible con valor por defecto.
+- PersonalRepository.java: selección bloqueante por cargo/disponibilidad.
+- PersonalService.java: asignar y liberar.
+- PersonalController.java: contratos internos para Cleaning.
+
+Restaurant:
+
+- application.properties: conexión parametrizable.
+- Consumo.java, ConsumoRepositorio.java y ConsumoControlador.java.
+
+Garage:
+
+- UsoEstacionamiento.java, UsoEstacionamientoRepository.java y
+  UsoEstacionamientoController.java.
+
+======================================================================
+7. CÓMO LEVANTAR EL PROYECTO
+======================================================================
+
+Requisitos:
+
+- Java 21 o superior (los pom compilan con release 21).
+- MySQL accesible en localhost:3306.
+- RabbitMQ accesible en localhost:5672.
+- Maven no necesita instalarse globalmente: cada servicio tiene mvnw.cmd.
+
+Opción A: levantar sólo infraestructura y ejecutar los servicios desde el IDE:
+
+    docker compose up -d mysql rabbitmq
+
+Panel RabbitMQ:
+
+    http://localhost:15672
+    usuario: guest
+    clave: guest
+
+Si MySQL ya está instalado y contiene las bases del proyecto:
+
+    docker compose up -d rabbitmq
+
+Luego iniciar cada aplicación desde el IDE o en siete terminales con:
+
+    .\mvnw.cmd spring-boot:run
+
+Usar como directorio de cada terminal la carpeta que contiene el pom.xml del
+servicio correspondiente. Orden recomendado:
+
+1) Staff, Rooms, Restaurant y Garage.
+2) Cleaning y Payments.
+3) Reservation.
+
+Opción B: ejecutar todo el sistema con Docker Compose:
+
+Primero generar los JAR de cada servicio desde su carpeta:
+
+    .\mvnw.cmd -DskipTests package
+
+Después, desde la raíz del repositorio:
+
+    docker compose up -d --build
+
+Para comprobar estados y consultar logs:
+
+    docker compose ps
+    docker compose logs -f
+
+Para detener el sistema sin borrar los datos:
+
+    docker compose down
+
+Las propiedades aceptan variables como SPRING_DATASOURCE_URL,
+SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+SPRING_RABBITMQ_HOST, ROOMS_SERVICE_URL, PAYMENTS_SERVICE_URL,
+STAFF_SERVICE_URL, RESERVATIONS_SERVICE_URL, RESTAURANT_SERVICE_URL y
+GARAGE_SERVICE_URL.
+
+======================================================================
+8. GUIÓN DE DEMOSTRACIÓN END-TO-END
+======================================================================
+
+Las fechas del ejemplo deben reemplazarse por fechas futuras.
+
+1) Crear empleado de limpieza:
+
+curl.exe -X POST http://localhost:8080/empleados `
+  -H "Content-Type: application/json" `
+  -d "{\"run\":\"12345678-9\",\"nombre\":\"Ana\",\"apellido\":\"López\",\"fechaNacimiento\":\"1990-01-01\",\"correo\":\"ana@nexus.cl\",\"telefono\":\"999999999\",\"turno\":\"DIA\",\"cargo\":\"LIMPIEZA\"}"
+
+2) Verificar que existe una habitación Disponible del tipo Doble. El seeder
+   de Rooms crea la habitación 101 si no existe.
+
+3) Crear reserva:
+
+curl.exe -X POST http://localhost:8083/reservaciones `
+  -H "Content-Type: application/json" `
+  -d "{\"clienteId\":\"CLI-001\",\"tipoHabitacion\":\"Doble\",\"fechaIngreso\":\"2026-08-10\",\"fechaSalida\":\"2026-08-13\"}"
+
+Guardar id y codigoReserva de la respuesta.
+
+4) Aprobar pago usando el codigoReserva:
+
+curl.exe -X POST http://localhost:8084/pagos/reservas/RES-XXXXXXXX/aprobar `
+  -H "Content-Type: application/json" `
+  -d "{\"monto\":120000,\"metodo\":\"TARJETA\"}"
+
+PaymentCompleted viaja por RabbitMQ. Al consultar la reserva debe estar
+CONFIRMADA y tener habitacionId.
+
+5) Check-in:
+
+curl.exe -X POST http://localhost:8083/reservaciones/1/check-in
+
+La habitación pasa a Ocupada mediante CheckInCompleted.
+
+6) Cargar consumo de restaurante:
+
+curl.exe -X POST http://localhost:8082/consumos `
+  -H "Content-Type: application/json" `
+  -d "{\"reservaCodigo\":\"RES-XXXXXXXX\",\"descripcion\":\"Cena\",\"monto\":25000}"
+
+7) Registrar estacionamiento y guardar el id retornado:
+
+curl.exe -X POST http://localhost:8085/usos-estacionamiento `
+  -H "Content-Type: application/json" `
+  -d "{\"reservaCodigo\":\"RES-XXXXXXXX\",\"patente\":\"ABCD12\",\"tarifaHora\":2000}"
+
+Finalizar el uso:
+
+curl.exe -X POST http://localhost:8085/usos-estacionamiento/1/salida
+
+8) Agregar un servicio adicional opcional:
+
+curl.exe -X POST http://localhost:8084/cargos-adicionales `
+  -H "Content-Type: application/json" `
+  -d "{\"reservaCodigo\":\"RES-XXXXXXXX\",\"descripcion\":\"Lavandería\",\"monto\":8000}"
+
+9) Check-out:
+
+curl.exe -X POST http://localhost:8083/reservaciones/1/check-out
+
+Este único comando produce tres efectos asincrónicos:
+
+- Rooms deja la habitación Sucia.
+- Cleaning crea tarea y Staff deja al empleado no disponible.
+- Payments consolida y guarda FacturaFinal.
+
+10) Consultar factura (también fuerza una actualización de subtotales):
+
+curl.exe http://localhost:8084/facturas/reserva/RES-XXXXXXXX
+
+11) Consultar tareas y finalizar la asignada:
+
+curl.exe http://localhost:8086/limpiezas
+curl.exe -X POST http://localhost:8086/limpiezas/1/finalizar
+
+CleaningFinished libera al empleado y Rooms deja la habitación Disponible.
+
+======================================================================
+9. VALIDACIÓN REALIZADA
+======================================================================
+
+- Se corrigió el wrapper Maven 3.3.4 para PowerShell.
+- Se descargó Maven y las dependencias mediante los wrappers.
+- Se detectó y corrigió el cambio de paquete de Jackson 3 en Spring Boot 4:
+  tools.jackson en lugar de com.fasterxml.jackson para ObjectMapper.
+- Los siete microservicios compilan con:
+
+    .\mvnw.cmd -DskipTests compile
+
+Resultado al 13-07-2026:
+
+- Rooms: OK
+- Reservation: OK
+- Payments: OK
+- Cleaning: OK
+- Restaurant: OK
+- Garage: OK
+- Staff: OK
+
+La demostración end-to-end fue ejecutada realmente el 13-07-2026. Los
+resultados y correcciones se detallan en la sección 11.
+
+======================================================================
+10. LIMITACIONES Y MEJORAS FUTURAS
+======================================================================
+
+- Para producción, implementar patrón Transactional Outbox. Actualmente los
+  eventos se publican después del commit, pero una caída exacta entre commit y
+  publicación podría requerir recuperación manual.
+- Agregar dead-letter queues y política de reintentos RabbitMQ.
+- Proteger endpoints /interno con autenticación de servicio.
+- Añadir API Gateway, OpenAPI y trazabilidad distribuida.
+- Sustituir ddl-auto=update por migraciones Flyway.
+- Añadir Testcontainers para pruebas integradas automáticas con MySQL/RabbitMQ.
+- Versionar contratos de eventos en un módulo o esquema formal.
+- Implementar tareas de mantenimiento como entidad propia; Staff ya permite
+  asignación genérica por cargo y Rooms contempla el estado En Mantenimiento.
+
+======================================================================
+11. EJECUCIÓN REAL END-TO-END - 13-07-2026
+======================================================================
+
+11.1 Entorno utilizado
+
+- Docker Engine 29.6.1.
+- Docker Compose 5.3.0.
+- MySQL 8.4 en contenedor nexus-mysql: healthy.
+- RabbitMQ 4 Management en contenedor nexus-rabbitmq: healthy.
+- Siete microservicios ejecutados en contenedores y expuestos en 8080..8086.
+- Java 25 JRE en los contenedores; bytecode compilado para Java 21.
+
+Para que la prueba fuera persistente y reproducible se amplió
+docker-compose.yml. Los intentos iniciales de lanzar procesos con
+Start-Process terminaban al cerrarse la sesión aislada que los había creado;
+eso no era un defecto de Spring, pero reveló que faltaba una forma simple de
+levantar el sistema completo fuera del IDE.
+
+11.2 Incidencias reales encontradas y corregidas
+
+Incidencia 1 - Payments y Cleaning no iniciaban
+
+Síntoma:
+
+    No qualifying bean of type RestClient.Builder available
+
+Causa: con las dependencias actuales, Spring Boot 4 no registró
+automáticamente RestClient.Builder como bean.
+
+Corrección:
+
+- FacturacionServicio y LimpiezaServicio ahora crean clientes con
+  RestClient.builder().baseUrl(...).build().
+- Ambos servicios fueron recompilados, reconstruidos y arrancaron conectados
+  a MySQL y RabbitMQ.
+
+Incidencia 2 - HTTP 500 al crear una reserva
+
+Síntoma SQL:
+
+    Column 'habitacion_id' cannot be null
+
+Causa: el modelo antiguo exigía una habitación al insertar, pero el nuevo
+flujo requiere crear PENDIENTE_PAGO sin asignación y asignar después del pago.
+
+Corrección:
+
+- Se eliminó nullable=false de Reservacion.habitacionId.
+- En el esquema de prueba se migró habitacion_id a BIGINT NULL.
+- Tras repetir, la reserva se creó sin habitación y PaymentCompleted la
+  confirmó/asignó correctamente.
+
+Incidencia 3 - HTTP 500 al cancelar una reserva
+
+Síntoma: el Feign client de Reservation recibía 404 al pedir el reembolso.
+
+Causa: el contrato no incluía el prefijo /pagos del PagoControlador.
+
+Corrección:
+
+- Ruta definitiva: POST /pagos/reservas/{codigo}/reembolso.
+- PagoClient y PagoControlador fueron alineados y reconstruidos.
+- La repetición generó correctamente el reembolso completo.
+
+11.3 Evidencia del flujo principal
+
+Reserva utilizada:
+
+- id: 1
+- codigoReserva: RES-532E84FC
+- clienteId: CLI-135506
+- estadía: 10-08-2026 a 13-08-2026 (3 noches)
+
+Secuencia verificada:
+
+1) POST Reservation creó PENDIENTE_PAGO y habitacionId=null.
+2) Payments guardó PAY-F0D5F8D3, monto 120, estado APROBADO.
+3) PaymentCompleted confirmó la reserva y asignó habitación ID 1, número 101.
+4) Rooms cambió la habitación de Disponible a Reservada.
+5) CheckInCompleted cambió la reserva a OCUPADA y habitación a Ocupada.
+6) Restaurant guardó consumo "Cena E2E" por 25.
+7) Garage guardó/finalizó uso E2E123 por 2 (mínimo una hora).
+8) Payments guardó cargo adicional "Lavanderia E2E" por 8.
+9) CheckOutCompleted dejó la reserva FINALIZADA y habitación Sucia.
+10) Cleaning creó LIMP-RES-532E84FC, estado ASIGNADA, empleadoId=1.
+11) Staff cambió disponible de true a false durante la asignación.
+12) Payments persistió automáticamente la factura final.
+13) Al finalizar limpieza, Cleaning emitió CleaningFinished.
+14) Staff volvió a disponible=true y Rooms dejó habitación Disponible.
+
+Factura final comprobada:
+
+- Habitación: 360.00 (3 x 120.00).
+- Restaurante: 25.00.
+- Estacionamiento: 2.00.
+- Servicios adicionales: 8.00.
+- Total: 395.00.
+- Pagado: 120.00.
+- Saldo: 275.00.
+
+11.4 Evidencia de cancelación y reembolso
+
+Reserva utilizada: RES-75326E32, id 2.
+
+- Pago aprobado: PAY-503EF6BD por 240.00.
+- Reserva llegó a CONFIRMADA y habitación Reservada.
+- Se canceló con más de siete días de anticipación.
+- Movimiento generado: REF-399D0EDC.
+- Tipo: REEMBOLSO.
+- Estado: REEMBOLSADO.
+- Monto: 240.00 (100%).
+- Estado final de reserva: CANCELADA.
+- Estado final de habitación: Disponible.
+
+11.5 Resultado final
+
+RESULTADO: DEMOSTRACIÓN END-TO-END EXITOSA DESPUÉS DE TRES CORRECCIONES.
+
+Todos los procesos críticos quedaron verificados contra servicios reales,
+bases MySQL separadas y RabbitMQ real. Al cerrar la prueba, los nueve
+contenedores (infraestructura + siete servicios) quedaron en ejecución.
+
+Los logs recientes no contienen ERROR ni Exception. Permanecen dos warnings
+no bloqueantes: MySQLDialect configurado explícitamente aunque Hibernate puede
+detectarlo, y spring.jpa.open-in-view habilitado por defecto. Se recomienda
+limpiarlos posteriormente, pero no afectan la comunicación demostrada.
+
+======================================================================
+12. PROPUESTA DE VALIDACIONES, DOCUMENTACIÓN, EUREKA Y DESPLIEGUE
+    ESTADO: PENDIENTE DE APROBACIÓN
+======================================================================
+
+Fecha de planificación: 13-07-2026.
+
+Esta sección describe cambios propuestos, todavía NO implementados. Se agregó
+antes de tocar código, dependencias o despliegue, para solicitar aprobación.
+
+12.1 Compatibilidad técnica verificada
+
+El proyecto usa Spring Boot 4.0.6. La matriz oficial indica que Spring Cloud
+2025.1 (Oakwood) es la línea compatible con Spring Boot 4.0.x e incluye Spring
+Cloud Netflix 5.0.x, OpenFeign 5.0.x y LoadBalancer 5.0.x.
+
+Versiones propuestas:
+
+- Spring Boot: mantener 4.0.6 en todos los servicios.
+- Java: mantener source/target 21 y JRE 25 en Docker.
+- Spring Cloud BOM: mantener/unificar 2025.1.2.
+- Spring Cloud Netflix Eureka: versión administrada por el BOM 2025.1.2.
+- springdoc-openapi: 3.0.3, compatible con Spring Boot 4.0.x.
+
+Referencias consultadas:
+
+- https://github.com/spring-cloud/spring-cloud-release/wiki/Supported-Versions
+- https://docs.spring.io/spring-cloud-netflix/reference/
+- https://springdoc.org/v4/index.html
+
+12.2 Nuevo microservicio Eureka Server
+
+Se propone crear nexus-eureka-server con:
+
+- Puerto 8761.
+- Dependencia spring-cloud-starter-netflix-eureka-server.
+- Anotación @EnableEurekaServer.
+- Modo standalone: register-with-eureka=false y fetch-registry=false.
+- Actuator para /actuator/health.
+- Dockerfile y servicio eureka-server en docker-compose.yml.
+- Dashboard accesible en http://localhost:8761.
+- Healthcheck Docker antes de iniciar los clientes.
+
+Eureka mantendrá el registro de instancias y sus heartbeats. No reemplazará
+RabbitMQ: Eureka descubrirá endpoints REST y RabbitMQ seguirá transportando
+eventos de dominio.
+
+12.3 Registro de los siete microservicios
+
+Se propone agregar a Staff, Rooms, Restaurant, Reservation, Payments, Garage
+y Cleaning:
+
+- BOM Spring Cloud 2025.1.2.
+- spring-cloud-starter-netflix-eureka-client.
+- spring-boot-starter-actuator donde aún no exista.
+- spring.application.name normalizado y estable.
+- eureka.client.serviceUrl.defaultZone configurable por EUREKA_DEFAULT_ZONE.
+- eureka.instance.prefer-ip-address y metadatos de health/info.
+- Actuator health/details con exposición mínima de health e info.
+
+Nombres de servicio propuestos:
+
+- nexus-staff
+- nexus-rooms
+- nexus-restaurant
+- nexus-reservation
+- nexus-payments
+- nexus-garage
+- nexus-cleaning
+
+12.4 Sustitución de URLs fijas por descubrimiento
+
+Los contratos REST dejarán de depender de host/puerto directos:
+
+- HabitacionClient usará @FeignClient(name="nexus-rooms") sin URL fija.
+- PagoClient usará @FeignClient(name="nexus-payments") sin URL fija.
+- Cleaning usará un RestClient.Builder con @LoadBalanced para nexus-staff.
+- Payments usará RestClient.Builder con @LoadBalanced para nexus-reservation,
+  nexus-restaurant y nexus-garage.
+- Se agregará Spring Cloud LoadBalancer cuando sea necesario.
+- Se definirán timeouts explícitos para llamadas remotas.
+
+En Docker, todos los clientes apuntarán a:
+
+    http://eureka-server:8761/eureka/
+
+En ejecución local desde IDE usarán por defecto:
+
+    http://localhost:8761/eureka/
+
+Se comprobará que las siete aplicaciones aparezcan con estado UP en Eureka.
+
+12.5 Plan de validaciones
+
+Validaciones transversales:
+
+- Todos los cuerpos de entrada tendrán DTO/record dedicado con @Valid.
+- IDs positivos y campos obligatorios sin espacios vacíos.
+- Límites de longitud compatibles con las columnas SQL.
+- Montos BigDecimal positivos, escala monetaria controlada y sin double.
+- Fechas con reglas coherentes y mensajes en español.
+- Estados/tipos/métodos definidos mediante enums en lugar de texto libre.
+- Normalización trim/mayúsculas para códigos, RUN, patente y estados.
+- Control de duplicados antes de llegar a constraints SQL.
+- Respuesta uniforme para errores de validación y negocio.
+
+Formato de error propuesto:
+
+- timestamp
+- status
+- error
+- codigo
+- mensaje
+- path
+- detalles por campo
+
+Se agregará @RestControllerAdvice en cada servicio para traducir:
+
+- 400: JSON o validación incorrecta.
+- 404: recurso no encontrado.
+- 409: duplicado o transición de estado inválida.
+- 422: regla de negocio no cumplida.
+- 503: dependencia remota o Eureka temporalmente no disponible.
+
+Validaciones específicas propuestas:
+
+Reservation:
+
+- clienteId con longitud y formato.
+- fechaIngreso no anterior al día actual.
+- fechaSalida estrictamente posterior a fechaIngreso.
+- tipo de habitación obligatorio y válido.
+- impedir check-in, check-out, edición o cancelación desde estados inválidos.
+- impedir reservas solapadas de una misma habitación.
+- idempotencia de PaymentCompleted, check-in y check-out.
+
+Payments:
+
+- monto mayor que cero y máximo compatible con precision=10, scale=2.
+- método de pago enum.
+- porcentaje de reembolso entre 0 y 100.
+- una aprobación final por reserva.
+- impedir reembolsar más que el total aprobado.
+- referencias únicas y reservaCodigo obligatorio en operaciones de reserva.
+
+Rooms:
+
+- número único y normalizado.
+- precio por noche positivo (no cero).
+- tipo y estado enum.
+- transiciones válidas entre Disponible, Reservada, Ocupada, Sucia y
+  En Mantenimiento.
+- una habitación en mantenimiento no puede asignarse.
+
+Cleaning:
+
+- tipo/estado enum.
+- finalizar solamente tareas ASIGNADAS o EN_PROCESO.
+- habitación, reserva y empleado obligatorios para tareas automáticas.
+- impedir más de una tarea activa por habitación/reserva.
+
+Staff:
+
+- validación real del dígito verificador del RUN chileno.
+- email único y válido.
+- teléfono con formato y longitud.
+- fecha de nacimiento pasada y edad laboral mínima configurable.
+- cargo y turno enum.
+- sólo empleados disponibles pueden recibir tareas.
+
+Restaurant:
+
+- reservaCodigo, descripción y monto obligatorios.
+- monto positivo con escala 2.
+- sólo cargar consumos a una reserva en estado permitido.
+
+Garage:
+
+- patente normalizada y con patrón permitido.
+- tarifa por hora positiva.
+- salida posterior a entrada.
+- impedir dos usos abiertos de la misma patente.
+- impedir finalizar dos veces el mismo uso.
+
+12.6 Documentación OpenAPI y Swagger
+
+Se propone integrar springdoc-openapi 3.0.3 en los siete servicios:
+
+- JSON OpenAPI en /v3/api-docs.
+- Swagger UI en /swagger-ui.html.
+- Título, descripción, versión y contacto por microservicio.
+- @Operation y respuestas documentadas en endpoints de negocio.
+- Esquemas y ejemplos para DTOs principales.
+- Documentación explícita de endpoints /interno.
+- Códigos 400, 404, 409, 422 y 503 documentados.
+
+Además se propone crear:
+
+- README.md raíz como guía corta de instalación y arquitectura.
+- docs/arquitectura.md con diagrama de componentes y flujos.
+- docs/eventos.md con payload, routing key, productor y consumidores.
+- docs/despliegue.md con comandos Docker, variables y diagnóstico.
+- docs/openapi.md con enlaces Swagger de todos los servicios.
+- docs/Hotel-Nexus.postman_collection.json para demostración reproducible.
+- docs/Hotel-Nexus.postman_environment.json para puertos/códigos dinámicos.
+
+La bitácora leeme.txt seguirá registrando cada modificación y evidencia.
+
+12.7 Despliegue Docker propuesto
+
+Se actualizará docker-compose.yml para incluir:
+
+- eureka-server antes de los clientes.
+- Healthchecks HTTP reales para Eureka y los siete microservicios.
+- depends_on con condition: service_healthy cuando corresponda.
+- restart: unless-stopped para servicios de aplicación.
+- Variables EUREKA_DEFAULT_ZONE y URLs de infraestructura.
+- Red interna única; sólo se expondrán puertos necesarios para la evaluación.
+- Profiles opcionales para infraestructura y stack completo.
+
+Se propone mejorar los Dockerfile:
+
+- Crear .dockerignore por servicio para no enviar source/target innecesario.
+- Mantener imagen JRE, usuario no-root y directorio de trabajo.
+- Healthcheck delegado a Compose/Actuator.
+- Etiquetas básicas de nombre y versión.
+
+También se propone un script PowerShell build-all.ps1 que:
+
+1) Compile/empaquete los ocho proyectos (Eureka + siete servicios).
+2) Detenga el proceso si un build falla.
+3) Construya imágenes Docker.
+4) Levante el stack.
+5) Espere healthchecks y muestre el dashboard Eureka/Swagger.
+
+No se propone agregar API Gateway en esta etapa porque no fue solicitado y
+ampliaría de forma importante el alcance. Puede añadirse posteriormente.
+
+12.8 Pruebas y criterios de aceptación
+
+Antes de declarar terminado el trabajo se ejecutará:
+
+- Compilación Maven de los ocho proyectos.
+- Pruebas unitarias de validadores y reglas de estado.
+- Pruebas web de errores y códigos HTTP.
+- Construcción limpia de todas las imágenes Docker.
+- Inicio del stack desde cero con Docker Compose.
+- Verificación de ocho contenedores de aplicación + MySQL + RabbitMQ.
+- Verificación de siete instancias UP en Eureka.
+- Verificación de /actuator/health=UP en cada servicio.
+- Verificación de /v3/api-docs y Swagger UI en cada servicio.
+- Repetición del escenario end-to-end exitoso de la sección 11.
+- Escenario de cancelación/reembolso.
+- Casos negativos: fechas inválidas, montos negativos, duplicados,
+  transiciones inválidas, RUN/patente/email incorrectos y dependencia caída.
+- Revisión de logs sin ERROR/Exception no explicados.
+- git diff --check.
+
+Criterio final: no se considerará funcional sólo porque compile. Eureka debe
+mostrar registros UP, Swagger debe renderizar contratos, las validaciones
+deben devolver errores uniformes y el flujo distribuido debe completarse.
+
+12.9 Archivos/módulos previstos
+
+Se espera modificar:
+
+- Los siete pom.xml y application.properties.
+- Clientes Feign y configuración RestClient de Reservation, Cleaning y
+  Payments.
+- DTOs, entidades, servicios y controladores que hoy aceptan texto libre o
+  carecen de reglas.
+- docker-compose.yml y los siete Dockerfile.
+- Tests de cada servicio.
+
+Se espera crear:
+
+- nexus-eureka-server/ (pom, aplicación, propiedades, test y Dockerfile).
+- Configuración OpenAPI por servicio.
+- Manejadores globales y modelos comunes de error por servicio.
+- Enums/validadores específicos por dominio.
+- Archivos .dockerignore.
+- build-all.ps1.
+- README.md y carpeta docs/.
+
+12.10 Riesgos y tratamiento
+
+- Cambiar Strings a enums puede afectar datos existentes: se revisarán valores
+  actuales y se harán cambios compatibles antes de endurecer columnas.
+- Eureka tarda algunos segundos en registrar/retirar instancias: las pruebas
+  esperarán estado UP en vez de usar tiempos fijos.
+- La caída de Eureka no debe detener eventos Rabbit ya conectados; se probará
+  esta separación.
+- La migración no borrará volúmenes ni datos Docker sin autorización expresa.
+- Se preservarán endpoints públicos existentes cuando sea posible.
+- Cada fallo real y su corrección se agregará a esta bitácora.
+
+12.11 Punto de aprobación
+
+No se ha implementado ninguno de los cambios de la sección 12. La siguiente
+etapa comenzará únicamente después de recibir aprobación explícita.
+
+13. Implementacion aprobada: validaciones, documentacion, despliegue y Eureka
+
+Fecha de ejecucion: 13-07-2026.
+
+13.1 Aprobacion
+
+El usuario respondio expresamente "estoy de acuerdo" despues de revisar el
+plan de la seccion 12. Solo entonces comenzaron los cambios de codigo.
+
+13.2 Eureka y descubrimiento de servicios
+
+Se creo el modulo nexus-eureka-server con Spring Boot 4.0.6, Spring Cloud
+2025.1.2, Netflix Eureka Server en 8761, Actuator, prueba de contexto y una
+imagen Docker que ejecuta con usuario no privilegiado.
+
+Los siete microservicios incorporaron Eureka Client, nombres normalizados,
+EUREKA_DEFAULT_ZONE y estado de salud. Reservation usa Feign por los nombres
+nexus-rooms y nexus-payments. Payments y Cleaning consultan DiscoveryClient
+y resuelven nexus-reservation, nexus-restaurant, nexus-garage y nexus-staff
+sin URLs de contenedor fijas.
+
+13.3 Validaciones y errores HTTP
+
+Se reforzaron los DTO/request de los siete servicios:
+
+- Reservation: cliente obligatorio, limites, IDs positivos, fechas no
+  pasadas y salida posterior al ingreso.
+- Payments: monto positivo y escala, metodos/estados permitidos, porcentaje
+  0..100 y motivo de reembolso obligatorio.
+- Rooms: numero, tipo, precio y cinco estados hoteleros permitidos.
+- Cleaning: referencia, habitacion, fecha y estados de tarea permitidos.
+- Staff: RUN chileno con calculo real de digito verificador, edad minima de
+  18 anos, email, telefono, turno, longitudes y RUN duplicado.
+- Restaurant: capacidades, longitudes, consumo positivo y escala monetaria.
+- Garage: estados, patente, tarifa positiva y escala monetaria.
+
+Se agrego GlobalExceptionHandler en cada servicio. ApiError contiene
+timestamp, status, error, codigo, mensaje, path y detalles. Se usan 400 para
+entrada invalida, 404 para inexistencia, 409 para conflicto, 503 para una
+dependencia remota y 500 para fallos imprevistos. Staff y Garage dejaron de
+capturar Exception de forma general, evitando ocultar conflictos como 404.
+
+Evidencia negativa ejecutada: POST /reservaciones con cliente vacio y fechas
+2020/2019 devolvio HTTP 400, codigo VALIDATION_ERROR y detalles para cliente,
+fecha de ingreso, fecha de salida y rango invalido.
+
+13.4 OpenAPI, Actuator y documentacion
+
+Los siete microservicios incorporaron springdoc-openapi 3.0.3 y una ficha
+OpenAPI propia. Se verifico HTTP 200 en /v3/api-docs para 8080..8086. Swagger
+UI queda disponible en /swagger-ui.html en cada puerto.
+
+Se crearon README.md, docs/arquitectura.md, docs/eventos.md,
+docs/despliegue.md, docs/openapi.md, una coleccion y entorno Postman, y
+scripts/build-all.ps1 para probar/empaquetar los ocho modulos.
+
+13.5 Pruebas reproducibles
+
+Los tests de los siete servicios de negocio usan H2 en memoria con modo
+MySQL, Eureka desactivado y listeners RabbitMQ detenidos solamente bajo
+src/test/resources. Produccion sigue usando MySQL, RabbitMQ y Eureka.
+
+Se corrigio el paquete historico incorrecto del test de Reservation,
+indicando expresamente NexusHospitalityReservationApplication.
+
+Comando final:
+
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-all.ps1
+
+Resultado: exit code 0 en 130 segundos. Eureka y los siete microservicios
+pasaron sus pruebas y generaron sus JAR.
+
+13.6 Despliegue Docker
+
+docker-compose.yml despliega diez contenedores: MySQL, RabbitMQ, Eureka y los
+siete servicios. Se agregaron healthchecks, depends_on por service_healthy,
+restart: unless-stopped y EUREKA_DEFAULT_ZONE. Los ocho contenedores Java
+ejecutan con usuario nexus sin privilegios y tienen .dockerignore.
+
+Se verificaron docker compose config --quiet, docker compose up -d --build y
+docker compose ps. Las diez unidades quedaron levantadas y saludables.
+
+13.7 Incidentes encontrados y correcciones
+
+1) Windows rechazo build-all.ps1 por la politica de scripts. Se documento y
+   uso -ExecutionPolicy Bypass solo para ese proceso, sin cambiar la politica
+   global.
+
+2) El test inicial de Eureka deshabilitaba eureka.client.enabled, pero el
+   servidor necesita ApplicationInfoManager aunque no se registre a si mismo.
+   Se elimino la propiedad contradictoria.
+
+3) Los tests antiguos intentaban usar MySQL real. Se agrego H2 de alcance
+   test. En Reservation tambien se corrigio la ubicacion de H2 en el pom.
+
+4) El test de Reservation no encontraba @SpringBootConfiguration por su
+   paquete historico. Se indico la clase de aplicacion expresamente.
+
+5) Reservation tenia un espacio final en server.port=${SERVER_PORT:8083}.
+   Eureka intentaba convertir "8083 " y el contenedor se reiniciaba. Se
+   elimino el espacio, se recompilo y quedo healthy.
+
+6) El primer RestClient @LoadBalanced de Payments/Cleaning tambien
+   interceptaba el transporte de Eureka y causaba "No instances available
+   for eureka-server". Se separo el cliente HTTP normal de la resolucion
+   DiscoveryClient de negocio. Ambos servicios se reinscribieron.
+
+7) Eureka marco Payments/Cleaning DOWN durante su primer ciclo de salud. En
+   el siguiente ciclo cambiaron a UP. La verificacion final espero el estado
+   del registro en vez de asumir un tiempo fijo corto.
+
+8) La primera consulta de limpieza ocurrio antes de terminar el evento
+   asincrono. Segundos despues aparecio ASIGNADA y pudo finalizarse. Las
+   demostraciones deben esperar la condicion de negocio.
+
+9) Maven mostro advertencias de compatibilidad futura de Lombok/Mockito con
+   Java 25. No produjeron errores ni pruebas fallidas.
+
+13.8 Evidencia Eureka, salud y contratos
+
+Consulta final de /eureka/apps:
+
+- NEXUS-CLEANING: UP
+- NEXUS-GARAGE: UP
+- NEXUS-PAYMENTS: UP
+- NEXUS-RESERVATION: UP
+- NEXUS-RESTAURANT: UP
+- NEXUS-ROOMS: UP
+- NEXUS-STAFF: UP
+
+Resultados finales:
+
+- /actuator/health: HTTP 200 en 8080..8086.
+- /v3/api-docs: HTTP 200 en 8080..8086.
+- git diff --check: exit code 0; solo avisos informativos LF/CRLF de Git.
+
+13.9 Demostracion transversal final
+
+Reserva de evidencia: RES-DC731ABA, id 3.
+
+1) Reserva creada en PENDIENTE_PAGO.
+2) Pago id 5 aprobado por 24000 mediante CREDITO.
+3) PaymentCompleted confirmo la reserva y asigno habitacion id 1 por Eureka.
+4) Check-in cambio la reserva a OCUPADA.
+5) Restaurante agrego consumo id 2 por 12500.
+6) Garage registro uso id 2 y calculo costo 3000.
+7) Check-out cambio la reserva a FINALIZADA.
+8) Payments consolido factura: habitacion 240, restaurante 12500,
+   estacionamiento 3000 y total 15740.
+9) Cleaning creo tarea id 3 ASIGNADA a empleado id 1.
+10) Al finalizar, la tarea quedo FINALIZADA, la habitacion volvio a
+    Disponible y empleadoDisponible=True.
+
+Los volumenes y datos Docker preexistentes se conservaron.
+
+13.10 Estado final
+
+La implementacion aprobada queda funcional y desplegada. Eureka registra los
+siete microservicios, las llamadas sincronas usan descubrimiento, RabbitMQ
+mantiene los eventos, Swagger documenta las APIs, las validaciones devuelven
+errores uniformes y el flujo transversal fue demostrado.
+
+Fin de la bitacora.
+
+14. Revision contra pauta EFT_126_DSY1103
+
+Fecha de revision: 13-07-2026.
+
+Fuente revisada: EFT_126_DSY1103 Instrucciones y Pauta_Estudiante.pdf.
+
+Leyenda:
+
+- [x] Cumplido y con evidencia local.
+- [~] Parcialmente cumplido.
+- [ ] Pendiente o sin evidencia encontrada.
+- [?] No verificable solamente desde el repositorio.
+
+14.1 Requisitos generales y arquitectura
+
+- [ ] Minimo 10 microservicios. Se encontraron ocho aplicaciones Spring Boot:
+  siete servicios de dominio y Eureka Server. MySQL y RabbitMQ son
+  infraestructura y no deben asumirse como microservicios evaluables.
+- [x] Separacion funcional entre Reservation, Payments, Rooms, Cleaning,
+  Staff, Restaurant y Garage.
+- [x] Eureka implementado para registro y descubrimiento de los siete
+  servicios de dominio.
+- [ ] API Gateway como punto de entrada unificado. No se encontro Spring Cloud
+  Gateway, rutas, prefijos ni filtros de Gateway.
+- [~] Patron CSR aplicado en la mayor parte del proyecto. ConsumoControlador,
+  UsoEstacionamientoController y CargoAdicionalControlador acceden
+  directamente a repositorios y omiten una capa Service.
+- [~] Organizacion y mantenibilidad. Existe separacion por paquetes, pero hay
+  nombres de paquetes con mayusculas, controladores con records internos y
+  algunas responsabilidades mezcladas.
+
+14.2 Persistencia y modelado
+
+- [x] Persistencia real con MySQL, JPA e Hibernate.
+- [x] Entidades con @Entity, claves primarias y @GeneratedValue.
+- [x] Repositorios JpaRepository y operaciones CRUD reales.
+- [x] Datasources configurados por variables de entorno y propiedades.
+- [ ] Migraciones versionadas con SQL, Flyway o Liquibase. No se encontraron.
+- [~] Normalizacion y relaciones. Las entidades se separan por dominio, pero
+  no se encontraron @OneToMany, @ManyToOne, @OneToOne, @ManyToMany ni
+  @JoinColumn; varias relaciones distribuidas se representan solo con IDs o
+  codigos sin integridad referencial dentro de una base.
+- [~] CRUD completo y uniforme. Los recursos principales poseen CRUD, pero no
+  todos los recursos auxiliares exponen el conjunto completo de operaciones.
+
+14.3 REST, validaciones y errores
+
+- [x] Endpoints REST con GET, POST, PUT y DELETE en los recursos principales.
+- [x] Rutas mayormente semanticas y JSON estructurado.
+- [~] Uso obligatorio de ResponseEntity. Staff, Reservation y
+  Estacionamiento lo utilizan de forma explicita; varios controladores
+  retornan entidades/listas directamente y dependen de @ResponseStatus.
+- [x] Bean Validation y @Valid implementados en los puntos de entrada
+  principales.
+- [x] Validaciones de fechas, montos, estados, patentes, telefono, email y
+  digito verificador de RUN.
+- [x] @RestControllerAdvice/GlobalExceptionHandler presente en los siete
+  servicios de dominio.
+- [x] Contrato ApiError uniforme con codigos 400, 404, 409, 503 y 500.
+- [~] DTOs separados de entidades en varios flujos. Aun existen endpoints que
+  reciben records internos o retornan directamente entidades JPA.
+- [~] Manejo de fallas remotas y timeouts implementado en Feign/RestClient,
+  aunque faltan pruebas automatizadas que demuestren todos los escenarios de
+  dependencia caida.
+
+14.4 Comunicacion distribuida
+
+- [x] Comunicacion REST mediante Feign Client y DiscoveryClient/RestClient.
+- [x] Descubrimiento dinamico mediante Eureka, sin URLs fijas para las
+  llamadas de negocio principales.
+- [x] Comunicacion asincrona RabbitMQ con ReservationCreated,
+  PaymentCompleted, CheckInCompleted, CheckOutCompleted, CleaningRequested y
+  CleaningFinished.
+- [x] Flujo transversal demostrado: reserva, pago, habitacion, restaurante,
+  garage, factura, limpieza y personal.
+- [x] Respuesta controlada 503 para dependencias remotas no disponibles.
+- [ ] API Gateway, rutas centralizadas y filtros basicos.
+
+14.5 Pruebas
+
+- [x] Ocho pruebas de carga de contexto ejecutan correctamente con Maven.
+- [x] Los servicios de negocio usan H2 en memoria durante las pruebas y no
+  dependen de MySQL externo.
+- [ ] Pruebas unitarias reales de servicios y reglas de negocio. Los ocho
+  archivos encontrados solo ejecutan contextLoads().
+- [ ] Uso demostrable de Mockito/mocks sobre repositorios o dependencias.
+- [ ] Asserts de reglas de dominio y estructura Given-When-Then.
+- [ ] Cobertura minima de 80%. No se encontro JaCoCo, reporte ni otra medicion
+  de cobertura.
+- [~] Coleccion Postman. Existe, pero contiene solo cuatro solicitudes y la
+  solicitud "Crear reserva" apunta a /reservas mientras la ruta real es
+  /reservaciones.
+- [ ] Pruebas Postman completas para endpoints, errores, codigos HTTP y flujos
+  distribuidos.
+
+14.6 Swagger/OpenAPI y documentacion
+
+- [x] springdoc-openapi 3.0.3 configurado en los siete servicios de dominio.
+- [x] /v3/api-docs y /swagger-ui.html verificados en 8080..8086.
+- [x] Titulo, version y descripcion general por servicio.
+- [~] Documentacion detallada de endpoints. No se encontraron @Operation,
+  @ApiResponse, @Schema, ejemplos JSON ni descripcion explicita de codigos de
+  respuesta en los controladores/modelos.
+- [x] README, arquitectura, eventos, despliegue y guia OpenAPI creados.
+- [~] README exigido para entrega. Incluye contexto, servicios, Swagger y
+  ejecucion local, pero faltan nombres de estudiantes, rutas del Gateway e
+  instrucciones/evidencia de ejecucion remota.
+
+14.7 Configuracion y despliegue
+
+- [x] Dockerfiles para Eureka y los siete servicios de dominio.
+- [x] docker-compose.yml funcional con MySQL, RabbitMQ, Eureka y siete
+  servicios.
+- [x] Healthchecks, depends_on por salud, variables de entorno, reinicio y
+  usuarios no-root.
+- [x] Despliegue local validado con diez contenedores operativos.
+- [ ] Configuracion de aplicaciones mediante application.yml/application.yaml.
+  Los servicios usan application.properties; docker-compose.yml no reemplaza
+  esta exigencia de configuracion Spring/Gateway.
+- [ ] Perfiles dev/prod u otros perfiles Spring organizados.
+- [~] Separacion de configuracion dependiente del entorno mediante variables;
+  no existe gestion formal de secretos ni perfiles.
+- [ ] Despliegue remoto en Railway, Render u otra plataforma. No se encontro
+  configuracion o evidencia local; la pauta indica que aplica cuando el
+  docente lo haya definido dentro del alcance.
+
+14.8 Logs y trazabilidad
+
+- [~] Spring Boot produce logs de arranque, JPA, RabbitMQ y Eureka, utiles para
+  diagnostico basico.
+- [ ] Logs de aplicacion estructurados con SLF4J para creaciones,
+  actualizaciones, errores, validaciones y correlacion entre capas. No se
+  encontraron LoggerFactory, @Slf4j ni llamadas log.info/warn/error propias.
+- [~] Los eventos incluyen identificadores de negocio para correlacion, pero
+  falta una estrategia de correlationId y logging transversal.
+
+14.9 GitHub, colaboracion y entrega
+
+- [x] Existe remote publico configurado:
+  https://github.com/PatricioCornes/Proyecto_Hotel_Nexus.git
+- [ ] El repositorio remoto no contiene el estado actual. HEAD local y
+  origin/main coinciden en el commit 7159c38, mientras existen 106 cambios sin
+  incorporar: 53 archivos rastreados modificados y 53 archivos no rastreados.
+- [ ] Historial tecnico y progresivo suficiente. Solo se observaron tres
+  commits recientes con mensajes "correccion", "ajustes de puertos" y
+  "conexion reservation y rooms"; los dos primeros son poco descriptivos.
+- [~] Hay evidencia de mas de un autor en Git, pero no demuestra distribucion
+  equitativa ni permite asociar el trabajo actual sin commits.
+- [ ] Tablero Trello o herramienta equivalente con tareas, responsables y
+  avance. No se encontro enlace ni evidencia.
+- [ ] Nombres de estudiantes y roles en README.
+- [?] Entrega grupal en AVA, activacion individual y cumplimiento de fecha de
+  cierre. Debe verificarse externamente.
+- [?] Ausencia de cambios posteriores a la fecha oficial de entrega. Debe
+  controlarse con el historial remoto y la fecha indicada por el docente.
+
+14.10 Preparacion para defensa individual
+
+- [?] Capacidad individual para explicar entidades, normalizacion, CSR,
+  comunicacion, eventos, errores, Swagger y despliegue.
+- [?] Capacidad para realizar en vivo cambios CRUD, reglas, validaciones,
+  comunicacion remota y codigos HTTP.
+- [?] Capacidad para diagnosticar mediante logs sin asistencia.
+- [ ] Base suficiente de pruebas unitarias para explicar mocks/asserts y
+  agregar una prueba durante la defensa. Actualmente solo hay contextLoads().
+- [?] Evidencia personal verificable mediante commits y tareas. El trabajo
+  actual aun no esta reflejado en commits.
+
+14.11 Pendientes criticos segun la pauta
+
+- [ ] Alcanzar al menos 10 microservicios coherentes.
+- [ ] Implementar API Gateway con rutas y filtros basicos.
+- [ ] Incorporar YAML y perfiles Spring organizados.
+- [ ] Crear pruebas unitarias de reglas/servicios con mocks y asserts.
+- [ ] Medir y demostrar cobertura minima del 80%.
+- [ ] Incorporar migraciones versionadas de base de datos.
+- [ ] Agregar logs SLF4J de aplicacion y trazabilidad.
+- [ ] Completar Swagger con operaciones, respuestas y ejemplos.
+- [ ] Completar/corregir la coleccion Postman.
+- [ ] Completar README con integrantes, roles y requisitos de entrega.
+- [ ] Crear evidencia GitHub progresiva y evidencia Trello/equivalente antes
+  de la fecha limite autorizada por el docente.
+- [ ] Confirmar si el docente exige despliegue remoto y, si corresponde,
+  implementarlo y documentarlo.
+
+Fin del checklist de pauta EFT.
+
+
+15. PLAN PREVIO: GUIA RAPIDA Y LIMPIEZA DE COMENTARIOS
+
+Fecha: 13 de julio de 2026.
+Estado: completado y verificado con autorizacion del usuario.
+
+15.1 Archivo de consulta rapida
+
+Se propone crear GUIA_ENDPOINTS.txt en la raiz del proyecto para facilitar la
+demostracion y la defensa. Incluira:
+
+- Enlaces de Eureka, Swagger y endpoints principales de cada microservicio.
+- Puertos de Eureka, RabbitMQ, MySQL y los siete servicios de dominio.
+- Ejemplos JSON listos para copiar de las operaciones crear y modificar.
+- Rutas y comandos de consulta, eliminacion y operaciones especiales.
+- Indicacion de los identificadores que deben reemplazarse en cada ejemplo.
+- Separacion entre ejecucion local/Laragon y ejecucion mediante Docker.
+
+Los ejemplos se obtendran de los controladores y DTO reales para evitar rutas,
+campos o tipos que no correspondan con la implementacion.
+
+15.2 Revision de comentarios del codigo
+
+Se propone revisar los archivos de produccion de los siete microservicios y:
+
+- Eliminar comentarios redundantes que solo repiten nombres de campos,
+  respuestas HTTP o acciones evidentes del codigo.
+- Retirar texto didactico o provisional que no forme parte de la documentacion
+  tecnica necesaria.
+- Conservar comentarios que expliquen reglas de negocio, decisiones no obvias,
+  contratos entre servicios, validaciones o configuracion necesaria.
+- No cambiar logica, firmas publicas, anotaciones, rutas, eventos ni modelos de
+  datos durante esta limpieza.
+- Ejecutar compilacion o pruebas para comprobar que la limpieza no introduzca
+  errores.
+
+La busqueda preliminar no encontro menciones literales a ChatGPT, Codex,
+"generado por IA" o equivalentes. Se observaron comentarios redundantes en
+Reservation, Cleaning y Restaurant que seran evaluados individualmente.
+
+15.3 Cambios ejecutados
+
+- Se creo GUIA_ENDPOINTS.txt en la raiz del proyecto.
+- Se registraron Eureka, RabbitMQ, MySQL, Swagger, OpenAPI, puertos, bases de
+  datos y enlaces principales de los siete microservicios.
+- Se documentaron rutas CRUD y cuerpos JSON validos para agregar y modificar
+  empleados, habitaciones, menu, reservaciones, pagos, estacionamientos y
+  limpiezas. Las operaciones DELETE se identificaron expresamente como
+  peticiones sin cuerpo.
+- Se agregaron ejemplos para pago y reembolso, check-in, check-out,
+  cancelacion, consumos, cargos adicionales, factura consolidada, uso de
+  estacionamiento, asignacion de personal y finalizacion de limpieza.
+- Se incorporo un orden recomendado para demostrar la comunicacion completa.
+
+15.4 Limpieza aplicada
+
+- Se eliminaron comentarios redundantes, didacticos, historicos o
+  provisionales de los archivos Java de produccion.
+- La limpieza alcanzo codigo de Reservation, Cleaning, Garage y Restaurant.
+- No se modificaron rutas, anotaciones, firmas, eventos, validaciones ni
+  reglas de negocio durante la limpieza.
+- Una busqueda posterior en todos los archivos Java no encontro comentarios
+  restantes ni menciones a ChatGPT, Codex, inteligencia artificial o texto
+  equivalente.
+
+15.5 Verificacion
+
+Se ejecuto mvnw.cmd test en los siete microservicios:
+
+- nexus-staff: correcto, codigo de salida 0.
+- nexus-rooms: correcto, codigo de salida 0.
+- nexus-restaurant: correcto, codigo de salida 0.
+- nexus-reservation: correcto, codigo de salida 0.
+- nexus-payments: correcto, codigo de salida 0.
+- nexus-garage: correcto, codigo de salida 0.
+- nexus-cleaning: correcto, codigo de salida 0.
+
+Las advertencias observadas corresponden a Spring, Mockito y conversion futura
+de finales de linea LF/CRLF de Git. No se detectaron errores de compilacion ni
+pruebas fallidas.
+
+Fin de la implementacion de la guia rapida y limpieza de comentarios.

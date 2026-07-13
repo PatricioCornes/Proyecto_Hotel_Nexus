@@ -45,12 +45,17 @@ public class LimpiezaControlador {
         limpiezaServicio.eliminar(id);
     }
 
+    @PostMapping("/{id}/finalizar")
+    public Limpieza finalizar(@PathVariable Long id) {
+        return limpiezaServicio.finalizar(id);
+    }
+
     public record LimpiezaRequest(
-            @jakarta.validation.constraints.NotBlank String referencia,
-            @jakarta.validation.constraints.NotNull @jakarta.validation.constraints.PositiveOrZero Long habitacionId,
-            @jakarta.validation.constraints.NotNull java.time.LocalDate fecha,
-            @jakarta.validation.constraints.NotBlank String tipo,
-            @jakarta.validation.constraints.NotBlank String estado
+            @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 80) String referencia,
+            @jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long habitacionId,
+            @jakarta.validation.constraints.NotNull @jakarta.validation.constraints.PastOrPresent java.time.LocalDate fecha,
+            @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 40) String tipo,
+            @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Pattern(regexp = "PENDIENTE|ASIGNADA|EN_PROGRESO|FINALIZADA", message = "Estado de limpieza no valido") String estado
     ) {}
 }
 

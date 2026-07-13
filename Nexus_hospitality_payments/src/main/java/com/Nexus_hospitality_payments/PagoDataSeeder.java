@@ -28,6 +28,7 @@ public class PagoDataSeeder implements CommandLineRunner {
                             .fecha(LocalDate.now())
                             .metodo("Tarjeta")
                             .estado("Pagado")
+                            .tipo("COBRO")
                             .build();
                     pagoRepositorio.save(pago);
                 }

@@ -1,0 +1,29 @@
+{
+  "info": {
+    "name": "Nexus Hospitality",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Salud de Reservation",
+      "request": {"method": "GET", "url": "{{reservation}}/actuator/health"}
+    },
+    {
+      "name": "Crear reserva",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {"mode": "raw", "raw": "{\n  \"clienteId\": \"CLI-DEMO\",\n  \"tipoHabitacion\": \"DOBLE\",\n  \"fechaIngreso\": \"2030-01-10\",\n  \"fechaSalida\": \"2030-01-12\"\n}"},
+        "url": "{{reservation}}/reservas"
+      }
+    },
+    {
+      "name": "Listar habitaciones",
+      "request": {"method": "GET", "url": "{{rooms}}/habitaciones"}
+    },
+    {
+      "name": "OpenAPI Payments",
+      "request": {"method": "GET", "url": "{{payments}}/v3/api-docs"}
+    }
+  ]
+}

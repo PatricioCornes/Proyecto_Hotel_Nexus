@@ -1,5 +1,7 @@
-FROM eclipse-temurin:25-jdk-alpine
+FROM eclipse-temurin:25-jre-alpine
+RUN addgroup -S nexus && adduser -S nexus -G nexus
 WORKDIR /app
-# Esto copia el .jar que generas con el comando clean install
 COPY target/*.jar app.jar
+RUN chown nexus:nexus app.jar
+USER nexus
 ENTRYPOINT ["java", "-jar", "app.jar"]

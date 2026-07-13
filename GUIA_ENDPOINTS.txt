@@ -1,0 +1,408 @@
+GUIA RAPIDA DE ENLACES, PUERTOS Y CUERPOS JSON
+PROYECTO HOTEL NEXUS
+
+Esta guia esta pensada para ejecutar peticiones desde Postman, Insomnia o
+Swagger. Reemplazar {id}, {codigo} y los datos de ejemplo por valores que
+existan en la base de datos.
+
+
+1. INFRAESTRUCTURA
+
+Eureka:
+http://localhost:8761
+
+RabbitMQ AMQP:
+localhost:5672
+
+RabbitMQ Management:
+http://localhost:15672
+Usuario por defecto: guest
+Clave por defecto: guest
+
+MySQL / Laragon:
+localhost:3306
+Usuario por defecto: root
+Clave por defecto: vacia
+
+IMPORTANTE:
+No ejecutar al mismo tiempo MySQL de Laragon y el contenedor nexus-mysql si
+ambos intentan ocupar el puerto 3306.
+
+
+2. MICROSERVICIOS, PUERTOS Y ENLACES
+
+Staff - nexus-staff
+Puerto: 8080
+API: http://localhost:8080/empleados
+Swagger: http://localhost:8080/swagger-ui.html
+OpenAPI JSON: http://localhost:8080/v3/api-docs
+Base de datos: db_nexus_staff
+
+Rooms - nexus-rooms
+Puerto: 8081
+API: http://localhost:8081/habitaciones
+Swagger: http://localhost:8081/swagger-ui.html
+OpenAPI JSON: http://localhost:8081/v3/api-docs
+Base de datos: db_hotel_nexus
+
+Restaurant - nexus-restaurant
+Puerto: 8082
+API: http://localhost:8082/restaurants
+Consumos: http://localhost:8082/consumos
+Swagger: http://localhost:8082/swagger-ui.html
+OpenAPI JSON: http://localhost:8082/v3/api-docs
+Base de datos: restaurant
+
+Reservation - nexus-reservation
+Puerto: 8083
+API: http://localhost:8083/reservaciones
+Swagger: http://localhost:8083/swagger-ui.html
+OpenAPI JSON: http://localhost:8083/v3/api-docs
+Base de datos: db_nexus_reservation
+
+Payments - nexus-payments
+Puerto: 8084
+API: http://localhost:8084/pagos
+Facturas: http://localhost:8084/facturas
+Cargos adicionales: http://localhost:8084/cargos-adicionales
+Swagger: http://localhost:8084/swagger-ui.html
+OpenAPI JSON: http://localhost:8084/v3/api-docs
+Base de datos: payments
+
+Garage - nexus-garage
+Puerto: 8085
+API: http://localhost:8085/estacionamientos
+Usos: http://localhost:8085/usos-estacionamiento
+Swagger: http://localhost:8085/swagger-ui.html
+OpenAPI JSON: http://localhost:8085/v3/api-docs
+Base de datos: db_nexus_garage
+
+Cleaning - nexus-cleaning
+Puerto: 8086
+API: http://localhost:8086/limpiezas
+Swagger: http://localhost:8086/swagger-ui.html
+OpenAPI JSON: http://localhost:8086/v3/api-docs
+Base de datos: cleaning
+
+
+3. REGLA GENERAL PARA EL CRUD
+
+Listar:
+GET http://localhost:{puerto}/{recurso}
+Sin cuerpo JSON.
+
+Buscar por id:
+GET http://localhost:{puerto}/{recurso}/{id}
+Sin cuerpo JSON.
+
+Agregar:
+POST http://localhost:{puerto}/{recurso}
+Header: Content-Type: application/json
+Usar el cuerpo indicado para el microservicio.
+
+Modificar:
+PUT http://localhost:{puerto}/{recurso}/{id}
+Header: Content-Type: application/json
+Usar el mismo formato completo utilizado para agregar.
+
+Eliminar:
+DELETE http://localhost:{puerto}/{recurso}/{id}
+Sin cuerpo JSON.
+
+
+4. STAFF - EMPLEADOS
+
+Listar: GET http://localhost:8080/empleados
+Buscar: GET http://localhost:8080/empleados/{id}
+Agregar: POST http://localhost:8080/empleados
+Modificar: PUT http://localhost:8080/empleados/{id}
+Eliminar: DELETE http://localhost:8080/empleados/{id}
+
+Cuerpo para agregar o modificar:
+{
+  "run": "12.345.678-5",
+  "nombre": "Camila",
+  "apellido": "Soto",
+  "fechaNacimiento": "1995-04-10",
+  "correo": "camila.soto@hotel.cl",
+  "telefono": "+56912345678",
+  "turno": "MANANA",
+  "cargo": "LIMPIEZA"
+}
+
+Asignar empleado disponible por cargo:
+POST http://localhost:8080/empleados/interno/asignar/LIMPIEZA
+Sin cuerpo JSON.
+
+Liberar empleado:
+POST http://localhost:8080/empleados/interno/{id}/liberar
+Sin cuerpo JSON.
+
+Turnos permitidos: MANANA, MAÑANA, TARDE, NOCHE, ROTATIVO.
+
+
+5. ROOMS - HABITACIONES
+
+Listar: GET http://localhost:8081/habitaciones
+Buscar: GET http://localhost:8081/habitaciones/{id}
+Agregar: POST http://localhost:8081/habitaciones
+Modificar: PUT http://localhost:8081/habitaciones/{id}
+Eliminar: DELETE http://localhost:8081/habitaciones/{id}
+
+Cuerpo para agregar o modificar:
+{
+  "numero": "301",
+  "tipo": "DOBLE",
+  "precioPorNoche": 85000,
+  "estado": "DISPONIBLE"
+}
+
+Estados permitidos:
+DISPONIBLE, RESERVADA, OCUPADA, SUCIA, EN_MANTENIMIENTO.
+
+Asignar automaticamente una habitacion disponible:
+POST http://localhost:8081/interno/habitaciones/asignar
+{
+  "tipo": "DOBLE"
+}
+
+Cambiar estado desde otro servicio:
+PUT http://localhost:8081/interno/habitaciones/{id}/estado
+{
+  "estado": "SUCIA"
+}
+
+
+6. RESTAURANT - MENU Y CONSUMOS
+
+Listar: GET http://localhost:8082/restaurants
+Buscar: GET http://localhost:8082/restaurants/{id}
+Agregar: POST http://localhost:8082/restaurants
+Modificar: PUT http://localhost:8082/restaurants/{id}
+Eliminar: DELETE http://localhost:8082/restaurants/{id}
+
+Cuerpo para agregar o modificar:
+{
+  "nombre": "Cena ejecutiva",
+  "categoria": "CENA",
+  "capacidad": 40,
+  "ubicacion": "Primer piso",
+  "activo": true
+}
+
+Cargar consumo a una reserva:
+POST http://localhost:8082/consumos
+{
+  "reservaCodigo": "RES-XXXXXXXX",
+  "descripcion": "Cena ejecutiva para dos personas",
+  "monto": 42000
+}
+
+Listar consumos de una reserva:
+GET http://localhost:8082/consumos/reserva/{codigo}
+
+Obtener total de restaurante:
+GET http://localhost:8082/consumos/reserva/{codigo}/total
+
+
+7. RESERVATION - RESERVACIONES
+
+Listar: GET http://localhost:8083/reservaciones
+Buscar: GET http://localhost:8083/reservaciones/{id}
+Agregar: POST http://localhost:8083/reservaciones
+Modificar: PUT http://localhost:8083/reservaciones/{id}
+Eliminar: DELETE http://localhost:8083/reservaciones/{id}
+
+Cuerpo para agregar o modificar con asignacion automatica:
+{
+  "clienteId": "CLI-1001",
+  "habitacionId": null,
+  "tipoHabitacion": "DOBLE",
+  "fechaIngreso": "2026-12-20",
+  "fechaSalida": "2026-12-23"
+}
+
+Cuerpo alternativo indicando una habitacion existente:
+{
+  "clienteId": "CLI-1001",
+  "habitacionId": 1,
+  "tipoHabitacion": "DOBLE",
+  "fechaIngreso": "2026-12-20",
+  "fechaSalida": "2026-12-23"
+}
+
+Las fechas deben ser actuales o futuras y fechaSalida debe ser posterior a
+fechaIngreso. El codigo y el estado son generados/controlados por el servicio.
+
+Check-in:
+POST http://localhost:8083/reservaciones/{id}/check-in
+Sin cuerpo JSON.
+
+Check-out:
+POST http://localhost:8083/reservaciones/{id}/check-out
+Sin cuerpo JSON.
+
+Cancelar:
+POST http://localhost:8083/reservaciones/{id}/cancelar
+Sin cuerpo JSON.
+
+Consultar cargo de habitacion por codigo:
+GET http://localhost:8083/reservaciones/interno/{codigo}/cargo-habitacion
+
+
+8. PAYMENTS - PAGOS, CARGOS Y FACTURA
+
+Listar: GET http://localhost:8084/pagos
+Buscar: GET http://localhost:8084/pagos/{id}
+Agregar: POST http://localhost:8084/pagos
+Modificar: PUT http://localhost:8084/pagos/{id}
+Eliminar: DELETE http://localhost:8084/pagos/{id}
+
+Cuerpo para agregar o modificar:
+{
+  "referencia": "PAGO-DEMO-001",
+  "monto": 255000,
+  "fecha": "2026-07-13",
+  "metodo": "CREDITO",
+  "estado": "PENDIENTE"
+}
+
+Metodos permitidos:
+EFECTIVO, DEBITO, CREDITO, TRANSFERENCIA.
+
+Estados permitidos:
+PENDIENTE, APROBADO, RECHAZADO, REEMBOLSADO.
+
+Aprobar el pago de una reserva:
+POST http://localhost:8084/pagos/reservas/{codigo}/aprobar
+{
+  "monto": 255000,
+  "metodo": "CREDITO"
+}
+
+Reembolsar una reserva:
+POST http://localhost:8084/pagos/reservas/{codigo}/reembolso
+{
+  "porcentaje": 50,
+  "motivo": "Cancelacion anticipada"
+}
+
+Agregar un servicio adicional:
+POST http://localhost:8084/cargos-adicionales
+{
+  "reservaCodigo": "RES-XXXXXXXX",
+  "descripcion": "Servicio de lavanderia",
+  "monto": 15000
+}
+
+Listar cargos adicionales:
+GET http://localhost:8084/cargos-adicionales/reserva/{codigo}
+
+Obtener factura consolidada:
+GET http://localhost:8084/facturas/reserva/{codigo}
+
+La factura consulta los cargos de habitacion, restaurante, estacionamiento y
+servicios adicionales asociados al mismo codigo de reserva.
+
+
+9. GARAGE - PLAZAS Y USO DE ESTACIONAMIENTO
+
+Listar: GET http://localhost:8085/estacionamientos
+Buscar: GET http://localhost:8085/estacionamientos/{id}
+Agregar: POST http://localhost:8085/estacionamientos
+Modificar: PUT http://localhost:8085/estacionamientos/{id}
+Eliminar: DELETE http://localhost:8085/estacionamientos/{id}
+
+Cuerpo para agregar o modificar una plaza:
+{
+  "codigoPlaza": "A-20",
+  "estado": "DISPONIBLE",
+  "patenteVehiculo": "",
+  "tipoVehiculo": "",
+  "fechaIngreso": null,
+  "habitacionHuesped": "",
+  "nombreContacto": "",
+  "observaciones": ""
+}
+
+Estados permitidos:
+DISPONIBLE, OCUPADO, RESERVADO, EN_MANTENIMIENTO.
+
+Registrar uso de estacionamiento:
+POST http://localhost:8085/usos-estacionamiento
+{
+  "reservaCodigo": "RES-XXXXXXXX",
+  "patente": "ABCD-12",
+  "tarifaHora": 3500
+}
+
+Registrar salida y calcular costo:
+POST http://localhost:8085/usos-estacionamiento/{id}/salida
+Sin cuerpo JSON.
+
+Listar usos de una reserva:
+GET http://localhost:8085/usos-estacionamiento/reserva/{codigo}
+
+Obtener total de estacionamiento:
+GET http://localhost:8085/usos-estacionamiento/reserva/{codigo}/total
+
+
+10. CLEANING - LIMPIEZAS
+
+Listar: GET http://localhost:8086/limpiezas
+Buscar: GET http://localhost:8086/limpiezas/{id}
+Agregar: POST http://localhost:8086/limpiezas
+Modificar: PUT http://localhost:8086/limpiezas/{id}
+Eliminar: DELETE http://localhost:8086/limpiezas/{id}
+
+Cuerpo para agregar o modificar:
+{
+  "referencia": "LIMP-DEMO-001",
+  "habitacionId": 1,
+  "fecha": "2026-07-13",
+  "tipo": "CHECK_OUT",
+  "estado": "PENDIENTE"
+}
+
+Estados permitidos:
+PENDIENTE, ASIGNADA, EN_PROGRESO, FINALIZADA.
+
+Finalizar una limpieza:
+POST http://localhost:8086/limpiezas/{id}/finalizar
+Sin cuerpo JSON.
+
+Al completar el flujo normal, Cleaning publica CleaningFinished y Rooms deja
+la habitacion nuevamente en estado DISPONIBLE.
+
+
+11. ORDEN RECOMENDADO PARA UNA DEMOSTRACION
+
+1. Abrir Eureka y comprobar que aparecen los siete servicios.
+2. Consultar las habitaciones y empleados disponibles.
+3. Crear una reservacion.
+4. Aprobar su pago usando el codigo devuelto por Reservation.
+5. Comprobar que la reserva queda confirmada y la habitacion reservada.
+6. Ejecutar check-in.
+7. Agregar consumo de restaurante, estacionamiento y cargo adicional.
+8. Consultar la factura consolidada.
+9. Registrar salida de estacionamiento antes de consultar la factura final.
+10. Ejecutar check-out.
+11. Comprobar la habitacion SUCIA y la tarea de limpieza asignada.
+12. Finalizar la limpieza y comprobar la habitacion DISPONIBLE.
+
+
+12. RESPUESTAS Y ERRORES FRECUENTES
+
+200 OK: consulta o modificacion correcta.
+201 Created: recurso creado.
+204 No Content: eliminacion correcta o lista sin resultados en Reservation.
+400 Bad Request: cuerpo JSON invalido o regla de negocio incumplida.
+404 Not Found: identificador inexistente.
+409 Conflict: estado o recurso incompatible con la operacion.
+
+Si aparece Connection refused:
+- Revisar que Eureka, RabbitMQ y los microservicios esten iniciados.
+- Revisar el puerto correspondiente en esta guia.
+- Si se usa Laragon, confirmar que MySQL este en 3306.
+- Si se usa Docker, confirmar con: docker compose ps
+

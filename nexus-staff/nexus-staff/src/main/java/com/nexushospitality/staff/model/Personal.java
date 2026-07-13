@@ -48,4 +48,7 @@ public class Personal {
     @Column(nullable = false)    
     private String cargo; 
 
+    @Column(nullable = false, columnDefinition = "boolean default true")
+    private Boolean disponible;
+
 }

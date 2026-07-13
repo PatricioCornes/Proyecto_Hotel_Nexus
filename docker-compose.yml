@@ -1,0 +1,171 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: nexus-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+    ports: ["3306:3306"]
+    volumes: ["nexus_mysql_data:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: nexus-rabbitmq
+    restart: unless-stopped
+    ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  eureka-server:
+    build: ./nexus-eureka-server
+    container_name: nexus-eureka-server
+    restart: unless-stopped
+    ports: ["8761:8761"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8761/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  staff:
+    build: ./nexus-staff/nexus-staff
+    restart: unless-stopped
+    ports: ["8080:8080"]
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/db_nexus_staff?createDatabaseIfNotExist=true&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      EUREKA_DEFAULT_ZONE: http://eureka-server:8761/eureka/
+    depends_on:
+      mysql: { condition: service_healthy }
+      eureka-server: { condition: service_healthy }
+    healthcheck: &app-health-8080
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  rooms:
+    build: ./Nexus_hospitality_rooms
+    restart: unless-stopped
+    ports: ["8081:8081"]
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/db_hotel_nexus?createDatabaseIfNotExist=true&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      SPRING_RABBITMQ_HOST: rabbitmq
+      EUREKA_DEFAULT_ZONE: http://eureka-server:8761/eureka/
+    depends_on:
+      mysql: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      eureka-server: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8081/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  restaurant:
+    build: ./Nexus_hospitality_restaurant
+    restart: unless-stopped
+    ports: ["8082:8082"]
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/restaurant?createDatabaseIfNotExist=true&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      EUREKA_DEFAULT_ZONE: http://eureka-server:8761/eureka/
+    depends_on:
+      mysql: { condition: service_healthy }
+      eureka-server: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8082/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  garage:
+    build: ./Nexus_hospitality_garage/Nexus_hospitality_garage
+    restart: unless-stopped
+    ports: ["8085:8085"]
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/db_nexus_garage?createDatabaseIfNotExist=true&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      EUREKA_DEFAULT_ZONE: http://eureka-server:8761/eureka/
+    depends_on:
+      mysql: { condition: service_healthy }
+      eureka-server: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8085/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  cleaning:
+    build: ./Nexus_hospitality_cleaning_service
+    restart: unless-stopped
+    ports: ["8086:8086"]
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/cleaning?createDatabaseIfNotExist=true&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      SPRING_RABBITMQ_HOST: rabbitmq
+      EUREKA_DEFAULT_ZONE: http://eureka-server:8761/eureka/
+    depends_on:
+      mysql: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      eureka-server: { condition: service_healthy }
+      staff: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8086/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  payments:
+    build: ./Nexus_hospitality_payments
+    restart: unless-stopped
+    ports: ["8084:8084"]
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/payments?createDatabaseIfNotExist=true&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      SPRING_RABBITMQ_HOST: rabbitmq
+      EUREKA_DEFAULT_ZONE: http://eureka-server:8761/eureka/
+    depends_on:
+      mysql: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      eureka-server: { condition: service_healthy }
+      restaurant: { condition: service_healthy }
+      garage: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8084/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  reservation:
+    build: ./Nexus_hospitality_reservation
+    restart: unless-stopped
+    ports: ["8083:8083"]
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/db_nexus_reservation?createDatabaseIfNotExist=true&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      SPRING_RABBITMQ_HOST: rabbitmq
+      EUREKA_DEFAULT_ZONE: http://eureka-server:8761/eureka/
+    depends_on:
+      mysql: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      eureka-server: { condition: service_healthy }
+      rooms: { condition: service_healthy }
+      payments: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8083/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+volumes:
+  nexus_mysql_data:

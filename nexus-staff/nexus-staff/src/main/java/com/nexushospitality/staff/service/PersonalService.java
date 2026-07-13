@@ -21,10 +21,13 @@ public class PersonalService {
     }
 
     public Personal findById(Long id) {
-        return personalRepository.findById(id).orElseThrow(() -> new RuntimeException("Personal no encontrado")); 
+        return personalRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Personal no encontrado"));
     }
 
     public Personal save(PersonalDTO dto) {
+        personalRepository.findByRun(dto.getRun()).ifPresent(p -> {
+            throw new IllegalStateException("Ya existe un empleado con el mismo RUN");
+        });
         Personal personal = new Personal();
         personal.setRun(dto.getRun());
         personal.setNombre(dto.getNombre());
@@ -34,6 +37,7 @@ public class PersonalService {
         personal.setTelefono(dto.getTelefono());
         personal.setCargo(dto.getCargo());
         personal.setTurno(dto.getTurno());
+        personal.setDisponible(true);
         
         return personalRepository.save(personal);
     }
@@ -53,7 +57,21 @@ public class PersonalService {
     }
 
     public void delete(Long id) {
+        findById(id);
         personalRepository.deleteById(id);
+    }
+
+    public Personal asignarDisponible(String cargo) {
+        Personal personal = personalRepository.findFirstByCargoIgnoreCaseAndDisponibleTrueOrderByIdAsc(cargo)
+                .orElseThrow(() -> new IllegalStateException("No hay empleados disponibles para " + cargo));
+        personal.setDisponible(false);
+        return personalRepository.save(personal);
+    }
+
+    public void liberar(Long id) {
+        Personal personal = findById(id);
+        personal.setDisponible(true);
+        personalRepository.save(personal);
     }
 
 }

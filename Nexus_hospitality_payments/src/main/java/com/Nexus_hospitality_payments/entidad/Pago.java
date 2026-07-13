@@ -37,5 +37,11 @@ public class Pago {
 
     @Column(nullable = false)
     private String estado;
+
+    @Column(name = "reserva_codigo")
+    private String reservaCodigo;
+
+    @Column(nullable = false, columnDefinition = "varchar(20) default 'COBRO'")
+    private String tipo;
 }
 

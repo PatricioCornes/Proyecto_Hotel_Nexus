@@ -20,13 +20,13 @@ import com.nexus.hospitality_reservation.dto.*;
 import com.nexus.hospitality_reservation.model.Reservacion;
 
 import java.util.List;
+import java.math.BigDecimal;
 
 
 @RestController
 @RequestMapping("/reservaciones")
 public class ReservaController {
 
-    // Servicio inyectado que contiene la lógica de negocio
     @Autowired
     private ReservacionService reservacionService;
 
@@ -37,9 +37,9 @@ public class ReservaController {
     public ResponseEntity<List<Reservacion>> listar() {
         List<Reservacion> reservacion = reservacionService.findAll();
         if (reservacion.isEmpty()) {
-            return ResponseEntity.noContent().build(); // 204 No Content
+            return ResponseEntity.noContent().build();
         }
-        return ResponseEntity.ok(reservacion); // 200 OK
+        return ResponseEntity.ok(reservacion);
     }
 
 
@@ -49,7 +49,7 @@ public class ReservaController {
             ReservacionDTO detalle = reservacionService.obtenerReservacionConDetalle(id);
             return ResponseEntity.ok(detalle);
         } catch (Exception c) {
-            return ResponseEntity.notFound().build(); // 404 Not Found
+            return ResponseEntity.notFound().build();
         }
     }
 
@@ -58,16 +58,16 @@ public class ReservaController {
     @PostMapping
     public ResponseEntity<Reservacion> guardar(@Valid @RequestBody ReservacionDTO dto) {
         Reservacion reservacionNueva = reservacionService.save(dto);
-        return ResponseEntity.status(HttpStatus.CREATED).body(reservacionNueva); // 201 Created
+        return ResponseEntity.status(HttpStatus.CREATED).body(reservacionNueva);
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<Reservacion> actualizar(@PathVariable Long id, @Valid @RequestBody ReservacionDTO dto) {
         try {
             Reservacion reservacionActual = reservacionService.update(id, dto);
-            return ResponseEntity.ok(reservacionActual); // 200 OK
+            return ResponseEntity.ok(reservacionActual);
         } catch (Exception e) {
-            return ResponseEntity.notFound().build(); // 404 Not Found
+            return ResponseEntity.notFound().build();
         }
     }
 
@@ -76,11 +76,31 @@ public class ReservaController {
     public ResponseEntity<Void> eliminar(@PathVariable Long id) {
         try {
             reservacionService.delete(id);
-            return ResponseEntity.noContent().build(); // 204 No Content
+            return ResponseEntity.noContent().build();
         } catch (Exception e) {
-            return ResponseEntity.notFound().build(); // 404 Not Found
+            return ResponseEntity.notFound().build();
         }
     }    
+
+    @PostMapping("/{id}/check-in")
+    public ResponseEntity<Reservacion> checkIn(@PathVariable Long id) {
+        return ResponseEntity.ok(reservacionService.checkIn(id));
+    }
+
+    @PostMapping("/{id}/check-out")
+    public ResponseEntity<Reservacion> checkOut(@PathVariable Long id) {
+        return ResponseEntity.ok(reservacionService.checkOut(id));
+    }
+
+    @PostMapping("/{id}/cancelar")
+    public ResponseEntity<Reservacion> cancelar(@PathVariable Long id) {
+        return ResponseEntity.ok(reservacionService.cancelar(id));
+    }
+
+    @GetMapping("/interno/{codigo}/cargo-habitacion")
+    public BigDecimal cargoHabitacion(@PathVariable String codigo) {
+        return reservacionService.cargoHabitacion(codigo);
+    }
 
 
 }
