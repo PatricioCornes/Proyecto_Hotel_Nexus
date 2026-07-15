@@ -28,4 +28,4 @@ docker compose ps
 | Cleaning | 8086 | Tareas de limpieza |
 | Eureka Server | 8761 | Registro y descubrimiento |
 
-La arquitectura y contratos están explicados en [docs/arquitectura.md](docs/arquitectura.md), [docs/eventos.md](docs/eventos.md), [docs/despliegue.md](docs/despliegue.md) y [docs/openapi.md](docs/openapi.md). La bitácora completa del trabajo se mantiene en `leeme.txt`.
+La arquitectura y contratos están explicados en [docs/arquitectura.md](docs/arquitectura.md), [docs/eventos.md](docs/eventos.md), [docs/despliegue.md](docs/despliegue.md) y [docs/openapi.md](docs/openapi.md).
